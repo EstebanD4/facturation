@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}:latest
+  IMAGE: ghcr.io/esteband4/facturation:latest
   APP_CONTAINER: facturation_app
   DB_CONTAINER: facturation_db
   PMA_CONTAINER: facturation_pma
