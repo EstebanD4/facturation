@@ -1,0 +1,49 @@
+services:
+  db:
+    image: mariadb:11.4
+    container_name: facturation-db
+    environment:
+      MARIADB_DATABASE: facturation
+      MARIADB_USER: factu
+      MARIADB_PASSWORD: factu_pwd
+      MARIADB_ROOT_PASSWORD: root_pwd
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-proot_pwd"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: facturation-phpmyadmin
+    depends_on:
+      - db
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: root_pwd
+
+  app:
+    build: .
+    container_name: facturation-app
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mariadb://db:3306/facturation
+      SPRING_DATASOURCE_USERNAME: factu
+      SPRING_DATASOURCE_PASSWORD: factu_pwd
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "true"
+
+volumes:
+  db_data:
