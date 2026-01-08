@@ -1,0 +1,114 @@
+name: Deploy to VPS (Docker, no compose)
+
+on:
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}:latest
+  APP_CONTAINER: facturation_app
+  DB_CONTAINER: facturation_db
+  PMA_CONTAINER: facturation_pma
+  NET: facturation_net
+  DB_VOLUME: facturation_db_data
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy on VPS (docker run)
+        run: |
+          ssh -p "${{ secrets.VPS_PORT }}" -i ~/.ssh/id_ed25519 \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            'set -e
+            echo "== Ensure docker network/volume =="
+            docker network inspect '${{ env.NET }}' >/dev/null 2>&1 || docker network create '${{ env.NET }}'
+            docker volume inspect '${{ env.DB_VOLUME }}' >/dev/null 2>&1 || docker volume create '${{ env.DB_VOLUME }}'
+
+            echo "== Login GHCR (needed if image is private) =="
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            echo "== Pull latest app image =="
+            docker pull '${{ env.IMAGE }}'
+
+            echo "== Start/ensure MariaDB =="
+            if ! docker ps -a --format "{{.Names}}" | grep -qx '${{ env.DB_CONTAINER }}'; then
+              docker run -d --name '${{ env.DB_CONTAINER }}' \
+                --network '${{ env.NET }}' \
+                --restart unless-stopped \
+                -e MARIADB_ROOT_PASSWORD='${{ secrets.DB_ROOT_PASSWORD }}' \
+                -e MARIADB_DATABASE='${{ secrets.DB_NAME }}' \
+                -v '${{ env.DB_VOLUME }}':/var/lib/mysql \
+                mariadb:11
+            else
+              docker start '${{ env.DB_CONTAINER }}' >/dev/null || true
+            fi
+
+            echo "== Start/ensure phpMyAdmin =="
+            if ! docker ps -a --format "{{.Names}}" | grep -qx '${{ env.PMA_CONTAINER }}'; then
+              docker run -d --name '${{ env.PMA_CONTAINER }}' \
+                --network '${{ env.NET }}' \
+                --restart unless-stopped \
+                -p '${{ secrets.PHPMYADMIN_PORT }}':80 \
+                -e PMA_HOST='${{ env.DB_CONTAINER }}' \
+                -e PMA_PORT=3306 \
+                phpmyadmin:latest
+            else
+              docker start '${{ env.PMA_CONTAINER }}' >/dev/null || true
+            fi
+
+            echo "== Replace app container =="
+            docker rm -f '${{ env.APP_CONTAINER }}' >/dev/null 2>&1 || true
+
+            docker run -d --name '${{ env.APP_CONTAINER }}' \
+              --network '${{ env.NET }}' \
+              --restart unless-stopped \
+              -p '${{ secrets.APP_PORT }}':8080 \
+              -e DB_HOST='${{ env.DB_CONTAINER }}' \
+              -e DB_PORT=3306 \
+              -e DB_NAME='${{ secrets.DB_NAME }}' \
+              -e DB_USER=root \
+              -e DB_PASS='${{ secrets.DB_ROOT_PASSWORD }}' \
+              '${{ env.IMAGE }}'
+
+            echo "== Cleanup old images =="
+            docker image prune -f
+
+            echo "== Status =="
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            '
