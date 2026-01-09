@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Status - Facturation</title>
+    <style>
+        body{font-family:system-ui,Segoe UI,Arial;margin:24px}
+        .card{border:1px solid #ddd;border-radius:12px;padding:16px;max-width:720px}
+        .row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #eee}
+        .row:last-child{border-bottom:none}
+        .dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:8px;background:#999}
+        .ok{background:#16a34a}
+        .ko{background:#dc2626}
+        code{background:#f5f5f5;padding:2px 6px;border-radius:6px}
+        button{padding:8px 12px;border-radius:10px;border:1px solid #ddd;background:white;cursor:pointer}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>🧾 Status - Facturation</h2>
+    <p>Dernière vérif : <span id="ts">-</span> <button onclick="run()">Rafraîchir</button></p>
+
+    <div class="row">
+        <div><span id="dot-app" class="dot"></span><strong>App</strong> <code id="url-app"></code></div>
+        <div id="msg-app">-</div>
+    </div>
+
+    <div class="row">
+        <div><span id="dot-pma" class="dot"></span><strong>phpMyAdmin</strong> <code id="url-pma"></code></div>
+        <div id="msg-pma">-</div>
+    </div>
+
+    <div class="row">
+        <div><span id="dot-db" class="dot"></span><strong>DB (option)</strong> <code id="url-db"></code></div>
+        <div id="msg-db">-</div>
+    </div>
+
+    <p style="opacity:.7;margin-top:14px">
+        🟢 = répond (HTTP OK) · 🔴 = indispo / timeout.
+    </p>
+</div>
+
+<script>
+    const host = window.location.hostname;
+    // adapte les ports si besoin
+    const APP_URL = `http://${host}:8080; // ou "/" si pas d'endpoint health
+    const PMA_URL = `http://${host}:8081/`;
+    const DB_URL  = `http://${host}:8080`; // option : si tu crées un endpoint côté app
+
+    document.getElementById('url-app').textContent = APP_URL;
+    document.getElementById('url-pma').textContent = PMA_URL;
+    document.getElementById('url-db').textContent  = DB_URL;
+
+    function setStatus(dotId, msgId, ok, msg){
+      const dot = document.getElementById(dotId);
+      dot.classList.remove('ok','ko');
+      dot.classList.add(ok ? 'ok' : 'ko');
+      document.getElementById(msgId).textContent = msg;
+    }
+
+    async function ping(url, timeoutMs=2500){
+      const ctrl = new AbortController();
+      const t = setTimeout(()=>ctrl.abort(), timeoutMs);
+      try{
+        const r = await fetch(url, {signal: ctrl.signal, mode: "no-cors"});
+        clearTimeout(t);
+        // no-cors -> on ne peut pas lire status, donc on considère "répond" si pas d'exception
+        return {ok:true, msg:"répond"};
+      }catch(e){
+        clearTimeout(t);
+        return {ok:false, msg:(e.name === "AbortError" ? "timeout" : "down")};
+      }
+    }
+
+    async function run(){
+      document.getElementById('ts').textContent = new Date().toLocaleString();
+
+      const app = await ping(APP_URL);
+      setStatus('dot-app','msg-app', app.ok, app.msg);
+
+      const pma = await ping(PMA_URL);
+      setStatus('dot-pma','msg-pma', pma.ok, pma.msg);
+
+      const db = await ping(DB_URL);
+      setStatus('dot-db','msg-db', db.ok, db.msg);
+    }
+
+    run();
+    setInterval(run, 5000);
+</script>
+</body>
+</html>
